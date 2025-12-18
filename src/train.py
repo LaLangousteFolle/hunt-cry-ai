@@ -22,7 +22,7 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-    for epoch in range(10):
+    for epoch in range(30):
         model.train()
         total_loss = 0.0
         for x, y in train_loader:

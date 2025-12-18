@@ -19,6 +19,8 @@ def predict_one(path: str):
         out = model(x)
         pred = out.argmax(1).item()
 
+    probs = out.softmax(1)[0].cpu().numpy()
+    print("probs:", dict(zip(IDX2CLASS.values(), probs)))
     print(f"{path} -> {IDX2CLASS[pred]}")
 
 if __name__ == "__main__":
