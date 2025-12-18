@@ -1,15 +1,7 @@
-"""Makefile for Hunt Showdown Sound project.
+# Makefile for Hunt Showdown Sound project
+# Note: All indented lines must use TAB character, not spaces
 
-Usage:
-    make install    - Install dependencies
-    make train      - Train the model
-    make predict    - Run prediction on test file
-    make test       - Run unit tests
-    make lint       - Check code style
-    make clean      - Remove generated files
-"""
-
-.PHONY: install train predict test lint clean help
+.PHONY: install install-dev train predict test lint format clean help
 
 install:
 	@echo "Installing dependencies..."
@@ -44,8 +36,8 @@ clean:
 	@echo "Cleaning up..."
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
-	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name ".coverage" -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name .coverage -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
 	@echo "Cleaned up!"
 
