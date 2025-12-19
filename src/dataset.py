@@ -7,7 +7,8 @@ from src.audio import audio_to_mel
 
 logger = logging.getLogger(__name__)
 
-CLASS2IDX = {"injured": 0, "kill": 1, "headshot": 2}
+# Only 2 classes: kill and headshot (removed "injured")
+CLASS2IDX = {"kill": 0, "headshot": 1}
 IDX2CLASS = {v: k for k, v in CLASS2IDX.items()}
 
 
@@ -17,14 +18,18 @@ class HuntCryDataset(Dataset):
     
     Loads audio files and their labels from a CSV file.
     Each row should contain 'filepath' and 'class' columns.
+    
+    NOTE: Only supports 2 classes: 'kill' and 'headshot'.
+    The 'injured' class is filtered out.
     """
     
-    def __init__(self, csv_path: str = "data/labels.csv"):
+    def __init__(self, csv_path: str = "data/labels.csv", filter_injured: bool = True):
         """
         Initialize the dataset.
         
         Args:
             csv_path: Path to CSV file with 'filepath' and 'class' columns
+            filter_injured: If True, remove 'injured' samples (default: True)
             
         Raises:
             FileNotFoundError: If CSV file doesn't exist
@@ -36,22 +41,33 @@ class HuntCryDataset(Dataset):
         self.df = pd.read_csv(csv_path)
         logger.info(f"Loaded dataset from {csv_path} with {len(self.df)} samples")
         
+        # Filter out injured samples
+        if filter_injured:
+            original_count = len(self.df)
+            self.df = self.df[self.df['class'] != 'injured']
+            filtered_count = original_count - len(self.df)
+            if filtered_count > 0:
+                logger.info(f"Filtered out {filtered_count} 'injured' samples")
+        
         # Validate CSV structure
         required_cols = {'filepath', 'class'}
         if not required_cols.issubset(self.df.columns):
             raise ValueError(f"CSV must contain columns: {required_cols}")
         
         if len(self.df) == 0:
-            raise ValueError("CSV file is empty")
+            raise ValueError("CSV file is empty (or all samples were filtered out)")
         
         # Check for invalid classes
         invalid_classes = set(self.df['class'].unique()) - set(CLASS2IDX.keys())
         if invalid_classes:
-            logger.warning(f"Found invalid classes: {invalid_classes}")
+            logger.warning(f"Found invalid classes (will be skipped): {invalid_classes}")
+            # Remove invalid classes
+            self.df = self.df[self.df['class'].isin(CLASS2IDX.keys())]
         
         # Log class distribution
         class_dist = self.df['class'].value_counts()
         logger.info(f"Class distribution: {class_dist.to_dict()}")
+        logger.info(f"Final dataset size: {len(self.df)} samples")
 
     def __len__(self) -> int:
         """Return dataset size."""
