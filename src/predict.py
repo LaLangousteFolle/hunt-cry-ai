@@ -35,23 +35,28 @@ def load_model(model_path: str, device: str = "cpu") -> tuple:
     logger.info(f"Loading model from {model_path}...")
     checkpoint = torch.load(model_path, map_location=device)
     
-    model = HuntCryClassifier().to(device)
+    # Get num_classes from checkpoint if available
+    num_classes = checkpoint.get('config', {}).get('num_classes', 2)
+    
+    model = HuntCryClassifier(num_classes=num_classes).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     
     logger.info(f"Model loaded successfully (trained for {checkpoint['epoch']} epochs)")
     logger.info(f"Best validation accuracy: {checkpoint['accuracy']:.2%}")
+    logger.info(f"Model classes: {num_classes} (kill vs headshot)")
     
     return model, checkpoint
 
 
 def predict_one(audio_path: str, model_path: str = "models/hunt_cry_best.pt",
                device: str = None, use_template: bool = False,
-               template_path: str = None) -> dict:
+               template_path: str = None, template_threshold: float = 0.65) -> dict:
     """
     Predict class for a single audio file.
     
-    Optionally uses template matching to improve headshot detection.
+    For 2-class model (kill vs headshot), template matching is HIGHLY recommended
+    to improve headshot detection accuracy.
     
     Args:
         audio_path: Path to audio file (wav, mp3, etc.)
@@ -59,6 +64,7 @@ def predict_one(audio_path: str, model_path: str = "models/hunt_cry_best.pt",
         device: Device to use ('cuda' or 'cpu'). Auto-detects if None.
         use_template: Whether to use template matching for headshot detection
         template_path: Path to headshot template audio (required if use_template=True)
+        template_threshold: Threshold for template matching (default: 0.65)
         
     Returns:
         Dictionary with predictions and probabilities
@@ -128,22 +134,21 @@ def predict_one(audio_path: str, model_path: str = "models/hunt_cry_best.pt",
             template_info = template_similarities
             logger.info(f"Template matching - Combined similarity: {template_similarities['combined']:.2%}")
             
-            # Boost headshot probability if template similarity is high
+            # AGGRESSIVE APPROACH: If template similarity high, FORCE headshot
             combined_sim = template_similarities['combined']
-            if combined_sim > 0.7:  # Threshold for headshot detection
-                # Adjust probabilities: increase headshot, decrease others
-                headshot_boost = combined_sim * 0.3  # Max 30% boost
-                cnn_probs["headshot"] = min(1.0, cnn_probs["headshot"] + headshot_boost)
+            if combined_sim > template_threshold:
+                logger.info(f"❗ Template similarity ({combined_sim:.1%}) > threshold ({template_threshold:.1%})")
+                logger.info("   → FORCING prediction to HEADSHOT")
                 
-                # Normalize probabilities
-                total = sum(cnn_probs.values())
-                cnn_probs = {k: v / total for k, v in cnn_probs.items()}
+                # Force headshot prediction
+                pred_class = "headshot"
+                pred_prob = combined_sim
                 
-                # Update prediction if headshot now highest
-                pred_class = max(cnn_probs, key=cnn_probs.get)
-                pred_prob = cnn_probs[pred_class]
-                
-                logger.info(f"Headshot probability boosted by template matching!")
+                # Update probabilities
+                cnn_probs["headshot"] = combined_sim
+                cnn_probs["kill"] = 1.0 - combined_sim
+            else:
+                logger.info(f"Template similarity ({combined_sim:.1%}) < threshold, using CNN prediction")
         except Exception as e:
             logger.warning(f"Template matching failed: {str(e)}")
     
@@ -158,12 +163,13 @@ def predict_one(audio_path: str, model_path: str = "models/hunt_cry_best.pt",
     
     if template_info:
         results["template_matching"] = template_info
+        results["template_threshold"] = template_threshold
     
     # Log results
     logger.info(f"\n=== Prediction Results ===")
     logger.info(f"Audio: {audio_path}")
-    logger.info(f"Predicted: {pred_class} ({pred_prob:.1%})")
-    logger.info(f"\nAll probabilities:")
+    logger.info(f"Predicted: {pred_class.upper()} ({pred_prob:.1%})")
+    logger.info(f"\nProbabilities:")
     for class_name, prob in results["probabilities"].items():
         logger.info(f"  - {class_name:10s}: {prob:.2%}")
     
@@ -172,14 +178,14 @@ def predict_one(audio_path: str, model_path: str = "models/hunt_cry_best.pt",
         logger.info(f"  - Cross-correlation: {template_info['cross_correlation']:.2%}")
         logger.info(f"  - Mel-Spectrogram:   {template_info['mel_spectrogram']:.2%}")
         logger.info(f"  - MFCC:              {template_info['mfcc']:.2%}")
-        logger.info(f"  - Combined:          {template_info['combined']:.2%}")
+        logger.info(f"  - Combined:          {template_info['combined']:.2%} (threshold: {template_threshold:.0%})")
     
     return results
 
 
 def predict_batch(audio_paths: list, model_path: str = "models/hunt_cry_best.pt",
                  device: str = None, use_template: bool = False,
-                 template_path: str = None) -> list:
+                 template_path: str = None, template_threshold: float = 0.65) -> list:
     """
     Predict classes for multiple audio files.
     
@@ -189,6 +195,7 @@ def predict_batch(audio_paths: list, model_path: str = "models/hunt_cry_best.pt"
         device: Device to use ('cuda' or 'cpu'). Auto-detects if None.
         use_template: Whether to use template matching
         template_path: Path to headshot template audio
+        template_threshold: Threshold for forcing headshot detection
         
     Returns:
         List of prediction dictionaries
@@ -197,7 +204,8 @@ def predict_batch(audio_paths: list, model_path: str = "models/hunt_cry_best.pt"
     for i, audio_path in enumerate(audio_paths):
         logger.info(f"\nProcessing {i+1}/{len(audio_paths)}...")
         try:
-            result = predict_one(audio_path, model_path, device, use_template, template_path)
+            result = predict_one(audio_path, model_path, device, use_template, 
+                               template_path, template_threshold)
             results.append(result)
         except Exception as e:
             logger.error(f"Failed to predict {audio_path}: {str(e)}")
@@ -214,17 +222,20 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: python -m src.predict <audio_file> [template_path]")
-        print("Example: python -m src.predict sample.wav headshot_template.wav")
+        print("Usage: python -m src.predict <audio_file> [template_path] [threshold]")
+        print("Example: python -m src.predict sample.wav headshot_template.wav 0.65")
+        print("\nNote: Model now predicts KILL vs HEADSHOT (2 classes only)")
         sys.exit(1)
     
     audio_file = sys.argv[1]
     template_file = sys.argv[2] if len(sys.argv) > 2 else None
+    threshold = float(sys.argv[3]) if len(sys.argv) > 3 else 0.65
     use_template = template_file is not None
     
     try:
-        result = predict_one(audio_file, use_template=use_template, template_path=template_file)
-        print(f"\n✓ Prediction: {result['predicted_class']} ({result['predicted_confidence']:.1%})")
+        result = predict_one(audio_file, use_template=use_template, 
+                           template_path=template_file, template_threshold=threshold)
+        print(f"\n✓ Prediction: {result['predicted_class'].upper()} ({result['predicted_confidence']:.1%})")
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         sys.exit(1)
