@@ -16,16 +16,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration
+# Configuration - Updated for 2-class classification
 CONFIG = {
-    "batch_size": 16,
-    "num_epochs": 30,
+    "batch_size": 8,  # Reduced for smaller dataset
+    "num_epochs": 50,  # Increased for better convergence
     "learning_rate": 1e-3,
     "train_split": 0.8,
     "num_workers": 4,
     "seed": 42,
     "model_dir": "models",
     "csv_path": "data/labels.csv",
+    "num_classes": 2,  # Only kill and headshot
 }
 
 
@@ -54,7 +55,7 @@ def create_dataloaders(config: dict) -> tuple:
         Tuple of (train_loader, val_loader)
     """
     logger.info("Creating dataset...")
-    dataset = HuntCryDataset(config["csv_path"])
+    dataset = HuntCryDataset(config["csv_path"], filter_injured=True)
     
     n_total = len(dataset)
     n_train = int(config["train_split"] * n_total)
@@ -219,19 +220,22 @@ def load_checkpoint(filepath: str, model: nn.Module, optimizer: optim.Optimizer 
 
 def main():
     """
-    Main training loop.
+    Main training loop for 2-class classification (kill vs headshot).
     """
     # Setup
     torch.manual_seed(CONFIG["seed"])
     device = setup_device()
     logger.info(f"Configuration: {CONFIG}")
+    logger.info("=" * 60)
+    logger.info("Training 2-class model: KILL vs HEADSHOT")
+    logger.info("=" * 60)
     
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(CONFIG)
     
-    # Initialize model
+    # Initialize model with 2 classes
     logger.info("Initializing model...")
-    model = HuntCryClassifier(num_classes=3, dropout_rate=0.3).to(device)
+    model = HuntCryClassifier(num_classes=2, dropout_rate=0.5).to(device)  # Higher dropout
     param_count = model.get_parameter_count()
     logger.info(f"Model parameters: {param_count:,}")
     
@@ -239,11 +243,14 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=CONFIG["learning_rate"])
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=3
+        optimizer, mode='max', factor=0.5, patience=5
     )
     
     # Training loop
     best_val_acc = 0.0
+    patience_counter = 0
+    max_patience = 10  # Early stopping
+    
     logger.info("Starting training...")
     
     for epoch in range(CONFIG["num_epochs"]):
@@ -264,12 +271,21 @@ def main():
         if is_best:
             best_val_acc = val_acc
             save_checkpoint(model, optimizer, epoch+1, val_acc, CONFIG, is_best=True)
+            patience_counter = 0
+        else:
+            patience_counter += 1
         
         # Learning rate scheduling
         scheduler.step(val_acc)
+        
+        # Early stopping
+        if patience_counter >= max_patience:
+            logger.info(f"Early stopping triggered after {epoch+1} epochs")
+            break
     
     logger.info(f"\n✓ Training completed! Best validation accuracy: {best_val_acc:.2%}")
     logger.info(f"Best model saved to: {CONFIG['model_dir']}/hunt_cry_best.pt")
+    logger.info("\nNote: Model now classifies KILL vs HEADSHOT only (2 classes)")
 
 
 if __name__ == "__main__":
